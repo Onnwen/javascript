@@ -2,13 +2,8 @@ name: CI
 
 on:
   workflow_dispatch:
-    inputs:
-      run_integration_tests:
-        description: 'Run integration tests'
-        type: boolean
-        default: false
   merge_group:
-  pull_request:
+  pull_request_target:
     branches:
       - main
       - release/v4
@@ -18,7 +13,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check-approval:
+    name: Check approval for external contribution
+    runs-on: 'blacksmith-8vcpu-ubuntu-2204'
+    steps:
+    - name: Verify if it's external contribution
+      run: if [[ "${{ github.event.pull_request.head.repo.fork }}" == "true" ]]; then echo "For security reasons, all pull requests from external forks need to be approved first before running any automated CI." && exit 1; else echo 'Skipping' && exit 0; fi
+
+  trigger-approval:
+    name: 'Trigger approval for external contribution'
+    runs-on: 'blacksmith-8vcpu-ubuntu-2204'
+    environment:
+      name: approve_external_contribution
+    if: ${{ github.event.pull_request.head.repo.fork }}
+
   formatting-linting:
+    needs: [check-approval]
     name: Formatting, linting & changeset checks
     runs-on: 'blacksmith-8vcpu-ubuntu-2204'
     timeout-minutes: ${{ vars.TIMEOUT_MINUTES_NORMAL && fromJSON(vars.TIMEOUT_MINUTES_NORMAL) || 10 }}
@@ -85,6 +95,7 @@ jobs:
           retention-days: 5
 
   unit-tests:
+    needs: [check-approval]
     name: Unit Tests
     runs-on: 'blacksmith-8vcpu-ubuntu-2204'
     timeout-minutes: ${{ vars.TIMEOUT_MINUTES_NORMAL && fromJSON(vars.TIMEOUT_MINUTES_NORMAL) || 10 }}
@@ -136,6 +147,7 @@ jobs:
           retention-days: 5
 
   integration-tests:
+    needs: [check-approval]
     name: Integration Tests
     runs-on: 'blacksmith-8vcpu-ubuntu-2204'
     timeout-minutes: ${{ vars.TIMEOUT_MINUTES_LONG && fromJSON(vars.TIMEOUT_MINUTES_LONG) || 15 }}
@@ -157,30 +169,11 @@ jobs:
             next-version: '15'
 
     steps:
-      # Skip integration tests from fork PRs to prevent secret exfiltration
-      - name: Get User Permission
-        id: checkAccess
-        uses: actions-cool/check-user-permission@v2
-        with:
-          require: write
-          username: ${{ github.triggering_actor }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Check User Permission
-        if: steps.checkAccess.outputs.require-result == 'false'
-        run: |
-          echo "${{ github.triggering_actor }} does not have permissions on this repo."
-          echo "Current permission level is ${{ steps.checkAccess.outputs.user-permission }}"
-          echo "Job originally triggered by ${{ github.actor }}"
-          exit 1
-
       - name: Checkout Repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           show-progress: false
-          # We must first verify the user permissions before checking out PR code
-          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Setup
         id: config
